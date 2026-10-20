@@ -78,6 +78,9 @@ jobs:
           host: windows
           target: desktop
           arch: win64_mingw
+          # aqt 3.3.0 cannot resolve the Windows Qt 6.11+ repository layout.
+          # Pin the upstream fix until it is included in a stable aqt release.
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@7e5a5c3d95cf962cfc2f36c86ffa0d2c07f1a0d4
           # The published Qt 6.12.0 MinGW SDK declares this compiler dependency.
           tools: tools_mingw1310,qt.tools.win64_mingw1310
           cache: true
@@ -140,7 +143,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             flatpak flatpak-builder xvfb xauth dbus-x11 desktop-file-utils \
-            python3 coreutils
+            python3 coreutils elfutils
       - name: Build Flatpak and test the installed app
         run: bash scripts/ci/build-flatpak.sh
       - name: Upload verified Flatpak

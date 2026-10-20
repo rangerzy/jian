@@ -9,7 +9,7 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
     exit 1
 fi
 
-for command in flatpak flatpak-builder python3 desktop-file-validate dbus-run-session xvfb-run timeout; do
+for command in flatpak flatpak-builder python3 desktop-file-validate dbus-run-session xvfb-run timeout eu-strip eu-elfcompress; do
     command -v "$command" >/dev/null || {
         echo "Required command not found: $command" >&2
         exit 1
