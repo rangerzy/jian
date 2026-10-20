@@ -34,7 +34,7 @@ On Ubuntu 24.04 x86_64:
 ```sh
 sudo apt-get update
 sudo apt-get install -y flatpak flatpak-builder python3 desktop-file-utils \
-  dbus-x11 xvfb xauth coreutils elfutils
+  dbus-x11 xvfb xauth coreutils elfutils librsvg2-common
 bash scripts/ci/build-flatpak.sh
 ```
 
