@@ -1,0 +1,178 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: "6.12.0"
+
+jobs:
+  macos:
+    name: macOS arm64 DMG
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4.4.1
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: mac
+          target: desktop
+          # Qt's clang_64 package contains both Intel and Apple Silicon slices.
+          arch: clang_64
+          cache: true
+      - name: Record and verify toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(qmake -query QT_VERSION)" = "$QT_VERSION"
+          xcodebuild -version
+          xcrun clang++ --version
+          cmake --version
+          ninja --version
+      - name: Configure and build
+        run: |
+          cmake --preset macos-arm64-release \
+            -DCMAKE_CXX_COMPILER="$(xcrun --find clang++)" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          cmake --build --preset macos-arm64-release --parallel 3
+      - name: Test QML startup
+        run: ctest --preset macos-arm64-release --no-tests=error
+      - name: Deploy Qt, build DMG and test the installed app
+        run: bash packaging/macos/package.sh
+      - name: Upload verified DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: jian-macos-arm64-package
+          path: dist/jian-*-macos-arm64.dmg
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    name: Windows x64 installer
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Qt and its matching MinGW toolchain
+        uses: jurplel/install-qt-action@v4.4.1
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_mingw
+          # The published Qt 6.12.0 MinGW SDK declares this compiler dependency.
+          tools: tools_mingw1310,qt.tools.win64_mingw1310
+          cache: true
+      - name: Select and verify the Qt MinGW toolchain
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $qtInstall = Split-Path (Split-Path $env:QT_ROOT_DIR -Parent) -Parent
+          $mingwBin = Join-Path $qtInstall "Tools/mingw1310_64/bin"
+          $compiler = Join-Path $mingwBin "g++.exe"
+          if (-not (Test-Path -LiteralPath $compiler)) {
+            throw "Qt's matching MinGW compiler is missing: $compiler"
+          }
+          if ((& $compiler -dumpfullversion).Trim() -ne "13.1.0") {
+            throw "Unexpected MinGW compiler version"
+          }
+          if ((& $compiler -dumpmachine).Trim() -ne "x86_64-w64-mingw32") {
+            throw "The compiler must target Windows x64"
+          }
+          if ((qmake -query QT_VERSION).Trim() -ne $env:QT_VERSION) {
+            throw "Unexpected Qt version"
+          }
+          "JIAN_MINGW_BIN=$mingwBin" >> $env:GITHUB_ENV
+          $mingwBin >> $env:GITHUB_PATH
+          & $compiler --version
+          cmake --version
+          ninja --version
+      - name: Configure and build
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake --preset windows-x64-release "-DCMAKE_CXX_COMPILER=$env:JIAN_MINGW_BIN/g++.exe" "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+          cmake --build --preset windows-x64-release --parallel 3
+      - name: Test QML startup
+        run: ctest --preset windows-x64-release --no-tests=error
+      - name: Deploy Qt, build installer and test the installed app
+        run: ./scripts/ci/package-windows.ps1
+      - name: Upload verified installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: jian-windows-x64-package
+          path: dist/jian-*-windows-x64-setup.exe
+          if-no-files-found: error
+          compression-level: 0
+
+  linux:
+    name: Linux x64 Flatpak
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test release publishing logic
+        run: python3 -B -m unittest discover -s tests -p test_publish_release.py
+      - name: Install Flatpak build and smoke test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            flatpak flatpak-builder xvfb xauth dbus-x11 desktop-file-utils \
+            python3 coreutils
+      - name: Build Flatpak and test the installed app
+        run: bash scripts/ci/build-flatpak.sh
+      - name: Upload verified Flatpak
+        uses: actions/upload-artifact@v7
+        with:
+          name: jian-linux-x64-package
+          path: dist/jian-*-linux-x64.flatpak
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    needs: [macos, windows, linux]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: jian-release-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Collect the three verified installers
+        uses: actions/download-artifact@v8
+        with:
+          pattern: jian-*-package
+          merge-multiple: true
+          path: release-assets
+      - name: Publish the installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/publish_release.py release-assets

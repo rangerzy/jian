@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Jian
+Comment=Qt Quick Hello World
+Exec=jian
+Icon=io.github.rangerzy.jian
+Terminal=false
+Categories=Utility;
+StartupNotify=true
